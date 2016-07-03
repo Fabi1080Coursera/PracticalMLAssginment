@@ -1,0 +1,184 @@
+---
+title: "Exercise Quality Model"
+author: "Fabian Hertwig"
+date: "3 Juli 2016"
+output: 
+  html_document: 
+    keep_md: yes
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+#Introduction
+
+*From Assignment Page:*
+
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement – a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. In this project, your goal will be to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. More information is available from the website here: http://groupware.les.inf.puc-rio.br/har (see the section on the Weight Lifting Exercise Dataset).
+
+*Information on the classes:*
+
+tl;dr Class A is the correct execution of the weight lifting exercise, the rest contains one common mistake in weight lifting.
+
+Six young health participants were asked to perform one set of 10 repetitions of the Unilateral Dumbbell Biceps Curl in five different fashions: exactly according to the specification (Class A), throwing the elbows to the front (Class B), lifting the dumbbell only halfway (Class C), lowering the dumbbell only halfway (Class D) and throwing the hips to the front (Class E).
+
+Read more: http://groupware.les.inf.puc-rio.br/har#weight_lifting_exercises#ixzz4DNoxHBP0
+
+#Summary
+In the data were a lot of variables which had a lot of NAs. These were removed. Also the classes were a little bit unbalanced, so they were downsampled to be balanced again. Also variables which seemed to be unrelated to the classification goal were removed, as timestamps and usernames.
+Next, a simple random forest model with 100 trees and standard settings was trained to asses the variable importance. Then a more sophisticated random forest model was build with a k-fold cross validation of k = 10 and only using the 22 most important variables. The number of important variables to use was found by optimzing the testset accuracy. Finaly an accuracy of 99.15 was achieved on the validation set.
+
+#Repoducible Research
+```{r}
+library(caret)
+library(parallel)
+library(doParallel)
+library(randomForest)
+
+set.seed(42)
+
+sessionInfo()
+```
+
+
+#Data Analysis
+A short summary of what is done:
+
+- download and load the files
+- get an overview of the data and interesting collumns
+- removed columns with a lot of NAs in the training or test dataset
+- removed columns that semed to be unrelated to the classification goal (eg. timestamps, usernames)
+- balanced the classes
+
+```{r}
+#Download files
+if(!file.exists("pml-training.csv")){
+  download.file("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv", "pml-training.csv")
+}
+if(!file.exists("pml-testing.csv")){
+  download.file("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv", "pml-testing.csv")
+}
+
+training_source <- read.csv("pml-training.csv")
+testing_quiz <- read.csv("pml-testing.csv")
+
+#Overview
+dim(training_source)
+colnames(training_source)
+summary(training_source[,1:7])
+summary(training_source[,"classe"])
+
+#Check for NAs
+nas_train <- apply(training_source, 2, FUN = function(x) sum(is.na(x)))
+sort(nas_train[nas_train > 0], decreasing = TRUE) / nrow(training_source)
+#97 percent NAs wont help much in classification. we will omit these rows.
+notNaColNums <- which(names(training_source) %in% names(nas_train[nas_train>0]))
+training_source <- training_source[-notNaColNums]
+notNaColNums <- which(names(testing_quiz) %in% names(nas_train[nas_train>0]))
+testing_quiz <- testing_quiz[-notNaColNums]
+
+#From looking at the raw data we see that there a still NAs in our testdata.
+nas_test <- apply(testing_quiz, 2, FUN = function(x) sum(is.na(x)))
+sort(nas_test[nas_test > 0], decreasing = TRUE) / nrow(testing_quiz)
+#we will remove these too
+notNaColNums <- which(names(training_source) %in% names(nas_test[nas_test>0]))
+training_source <- training_source[-notNaColNums]
+notNaColNums <- which(names(testing_quiz) %in% names(nas_test[nas_test>0]))
+testing_quiz <- testing_quiz[-notNaColNums]
+
+#Variable x is the same as the rownumber and we wont need timestamps and windows numbers. Username should also be omitted so it is independent of the user
+training_source <- training_source[,8:60]
+testing_quiz <- testing_quiz[,8:60]
+
+#Lets check the class balance
+table(training_source$classe)
+#It is a little bit inbalanced, so we will sample 3200 obersvations for each class
+training_source <- downSample(training_source, training_source$classe)
+training_source$Class <- NULL #Class column is introduced by the downSample function, but not needed as the classe column still exists
+table(training_source$classe)
+
+
+```
+
+
+#Model Fitting
+
+First of all we will create another test and validation set using a 75/20/5 split.
+```{r}
+splitSample <- sample(1:3, size=nrow(training_source), prob=c(0.75,0.2,0.05), replace = TRUE)
+
+training <- training_source[splitSample == 1,]
+testing <- training_source[splitSample == 2,]
+validation <- training_source[splitSample == 3,]
+
+c(nrow(training),nrow(testing),nrow(validation))
+
+```
+
+Now we will create a simple random forest model to find the most important variables.
+
+```{r}
+
+simple_rf <- randomForest(classe ~ ., data = training, ntree = 100)
+
+varImpPlot(simple_rf)
+
+varimp <- varImp(simple_rf)
+varimp$names <- rownames(varimp)
+top_variables <- varimp[order(varimp$Overall, decreasing = TRUE),"names"][1:23]
+
+```
+
+Now we will use caret to train a more sophisticated random forest with a cross validiation with 10 folds. We will only use the most important variables.
+we will use the parralell package to improve processing time as explained [here](https://github.com/lgreski/datasciencectacontent/blob/master/markdown/pml-randomForestPerformance.md).
+
+
+```{r, cache=TRUE}
+
+training.topvar <- training[,c(top_variables, "classe")]
+
+cluster <- makeCluster(detectCores() - 1) # convention to leave 1 core for OS
+registerDoParallel(cluster)
+
+fitControl <- trainControl(method = "cv", number = 10, allowParallel = TRUE)
+
+fit <- train(classe ~ ., method="rf",data=training.topvar,trControl = fitControl)
+
+stopCluster(cluster)
+
+fit
+```
+
+#Model Evaluation
+Seems like we got a prety good training accuracy. Lets check our test accuracy.
+
+```{r}
+pred <- predict(fit, testing)
+confusionMatrix(pred, testing$classe)
+
+```
+
+I increased the number of variables from the most important variables until there was no increase in the testset accuracy. So no we will check the final accuracy on the validation set.
+
+| Predcitors | Testset Accuracy |
+|------------|------------------|
+| 10         | 0.9819           |
+| 15         | 0.9869           |
+| 20         | 0.9894           |
+| 22         | 0.9912           |
+| 23         | 0.9906           |
+| 25         | 0.9891           |
+
+```{r}
+pred <- predict(fit, validation)
+confusionMatrix(pred, validation$classe)
+```
+
+This is a pretty good accuracy. Lets create the predcitions for the final Quiz
+
+```{r}
+quiz_pred <- predict(fit, testing_quiz)
+data.frame(problem_id = testing_quiz$problem_id, prediction = as.factor(quiz_pred))
+```
+

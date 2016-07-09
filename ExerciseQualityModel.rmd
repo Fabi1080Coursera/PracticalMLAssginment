@@ -27,7 +27,7 @@ Read more: http://groupware.les.inf.puc-rio.br/har#weight_lifting_exercises#ixzz
 
 #Summary
 In the data were a lot of variables which had a lot of NAs. These were removed. Also the classes were a little bit unbalanced, so they were downsampled to be balanced again. Also variables which seemed to be unrelated to the classification goal were removed, as timestamps and usernames.
-Next, a simple random forest model with 100 trees and standard settings was trained to asses the variable importance. Then a more sophisticated random forest model was build with a k-fold cross validation of k = 10 and only using the 22 most important variables. The number of important variables to use was found by optimzing the testset accuracy. Finaly an accuracy of 99.15 was achieved on the validation set.
+Next, a  random forest model  was trained using cross valdiation to tune the number of randomly selected predictors parameter.  Finaly an accuracy over 98% was achieved validated by the out of sample error estimation by the cross validation during training and on unseen data.
 
 #Repoducible Research
 ```{r}
@@ -103,79 +103,46 @@ table(training_source$classe)
 
 
 #Model Fitting
+First we will split the data into a test an training set.
 
-First of all we will create another test and validation set using a 75/20/5 split.
-```{r}
-splitSample <- sample(1:3, size=nrow(training_source), prob=c(0.75,0.2,0.05), replace = TRUE)
-
-training <- training_source[splitSample == 1,]
-testing <- training_source[splitSample == 2,]
-validation <- training_source[splitSample == 3,]
-
-c(nrow(training),nrow(testing),nrow(validation))
-
-```
-
-Now we will create a simple random forest model to find the most important variables.
-
-```{r}
-
-simple_rf <- randomForest(classe ~ ., data = training, ntree = 100)
-
-varImpPlot(simple_rf)
-
-varimp <- varImp(simple_rf)
-varimp$names <- rownames(varimp)
-top_variables <- varimp[order(varimp$Overall, decreasing = TRUE),"names"][1:23]
-
-```
-
-Now we will use caret to train a more sophisticated random forest with a cross validiation with 10 folds. We will only use the most important variables.
+Then we will use caret to train a random forest with a cross validiation with 10 folds. This will automatically tune the mtry parameters and therefore take a while. Mtry is the number of randomly selected predictors each tree uses.
 we will use the parralell package to improve processing time as explained [here](https://github.com/lgreski/datasciencectacontent/blob/master/markdown/pml-randomForestPerformance.md).
 
 
 ```{r, cache=TRUE}
 
-training.topvar <- training[,c(top_variables, "classe")]
+intrain <- createDataPartition(training_source$classe, 1, p = 0.6, list = FALSE)
+training <- training_source[intrain,]
+testing <- training_source[-intrain,]
 
 cluster <- makeCluster(detectCores() - 1) # convention to leave 1 core for OS
 registerDoParallel(cluster)
 
 fitControl <- trainControl(method = "cv", number = 10, allowParallel = TRUE)
 
-fit <- train(classe ~ ., method="rf",data=training.topvar,trControl = fitControl)
+fit <- train(classe ~ ., method="rf",data = training, trControl = fitControl)
 
 stopCluster(cluster)
 
 fit
+plot(fit)
 ```
 
-#Model Evaluation
-Seems like we got a prety good training accuracy. Lets check our test accuracy.
+The best accuracy in cross validation was archieved with 27 randomly selected predictor per tree. But there are only changes in the range of 0.2% by using different numbers of predictors. The estimatet out-of-sample error using the 10-fold-cross validation is `r 1- fit$results$Accuracy[2]` percent.
+
+This is a pretty good accuracy. 
+
+Let's check the out of sample error with an truly unseen dataset.
 
 ```{r}
-pred <- predict(fit, testing)
-confusionMatrix(pred, testing$classe)
-
+confusionMatrix(predict(fit, testing), testing$classe)
 ```
 
-I increased the number of variables from the most important variables until there was no increase in the testset accuracy. So no we will check the final accuracy on the validation set.
+It is pretty much the same error as the estimatet error from the cross validation.
 
-| Predcitors | Testset Accuracy |
-|------------|------------------|
-| 10         | 0.9819           |
-| 15         | 0.9869           |
-| 20         | 0.9894           |
-| 22         | 0.9912           |
-| 23         | 0.9906           |
-| 25         | 0.9891           |
+One could try to further tune the model to get a better accuracy, but im pretty confident that this is good enough for the assignment. Generally speaking, models with an accuracy over 95% are considered very good.
 
-```{r}
-pred <- predict(fit, validation)
-confusionMatrix(pred, validation$classe)
-```
-
-This is a pretty good accuracy. Lets create the predcitions for the final Quiz
+Lets create the predcitions for the final Quiz
 
 ```{r}
 quiz_pred <- predict(fit, testing_quiz)

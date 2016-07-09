@@ -8,7 +8,7 @@ Fabian Hertwig
 
 *From Assignment Page:*
 
-Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement – a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. In this project, your goal will be to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. More information is available from the website here: http://groupware.les.inf.puc-rio.br/har (see the section on the Weight Lifting Exercise Dataset).
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement â a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. In this project, your goal will be to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. More information is available from the website here: http://groupware.les.inf.puc-rio.br/har (see the section on the Weight Lifting Exercise Dataset).
 
 *Information on the classes:*
 
@@ -20,7 +20,7 @@ Read more: http://groupware.les.inf.puc-rio.br/har#weight_lifting_exercises#ixzz
 
 #Summary
 In the data were a lot of variables which had a lot of NAs. These were removed. Also the classes were a little bit unbalanced, so they were downsampled to be balanced again. Also variables which seemed to be unrelated to the classification goal were removed, as timestamps and usernames.
-Next, a simple random forest model with 100 trees and standard settings was trained to asses the variable importance. Then a more sophisticated random forest model was build with a k-fold cross validation of k = 10 and only using the 22 most important variables. The number of important variables to use was found by optimzing the testset accuracy. Finaly an accuracy of 99.15 was achieved on the validation set.
+Next, a  random forest model  was trained using cross valdiation to tune the number of randomly selected predictors parameter.  Finaly an accuracy over 98% was achieved validated by the out of sample error estimation by the cross validation during training and on unseen data.
 
 #Repoducible Research
 
@@ -390,54 +390,24 @@ table(training_source$classe)
 
 
 #Model Fitting
+First we will split the data into a test an training set.
 
-First of all we will create another test and validation set using a 75/20/5 split.
-
-```r
-splitSample <- sample(1:3, size=nrow(training_source), prob=c(0.75,0.2,0.05), replace = TRUE)
-
-training <- training_source[splitSample == 1,]
-testing <- training_source[splitSample == 2,]
-validation <- training_source[splitSample == 3,]
-
-c(nrow(training),nrow(testing),nrow(validation))
-```
-
-```
-## [1] 12041  3156   883
-```
-
-Now we will create a simple random forest model to find the most important variables.
-
-
-```r
-simple_rf <- randomForest(classe ~ ., data = training, ntree = 100)
-
-varImpPlot(simple_rf)
-```
-
-![](ExerciseQualityModel_files/figure-html/unnamed-chunk-4-1.png)<!-- -->
-
-```r
-varimp <- varImp(simple_rf)
-varimp$names <- rownames(varimp)
-top_variables <- varimp[order(varimp$Overall, decreasing = TRUE),"names"][1:23]
-```
-
-Now we will use caret to train a more sophisticated random forest with a cross validiation with 10 folds. We will only use the most important variables.
+Then we will use caret to train a random forest with a cross validiation with 10 folds. This will automatically tune the mtry parameters and therefore take a while. Mtry is the number of randomly selected predictors each tree uses.
 we will use the parralell package to improve processing time as explained [here](https://github.com/lgreski/datasciencectacontent/blob/master/markdown/pml-randomForestPerformance.md).
 
 
 
 ```r
-training.topvar <- training[,c(top_variables, "classe")]
+intrain <- createDataPartition(training_source$classe, 1, p = 0.6, list = FALSE)
+training <- training_source[intrain,]
+testing <- training_source[-intrain,]
 
 cluster <- makeCluster(detectCores() - 1) # convention to leave 1 core for OS
 registerDoParallel(cluster)
 
 fitControl <- trainControl(method = "cv", number = 10, allowParallel = TRUE)
 
-fit <- train(classe ~ ., method="rf",data=training.topvar,trControl = fitControl)
+fit <- train(classe ~ ., method="rf",data = training, trControl = fitControl)
 
 stopCluster(cluster)
 
@@ -447,119 +417,80 @@ fit
 ```
 ## Random Forest 
 ## 
-## 12041 samples
-##    23 predictor
-##     5 classes: 'A', 'B', 'C', 'D', 'E' 
+## 9650 samples
+##   52 predictor
+##    5 classes: 'A', 'B', 'C', 'D', 'E' 
 ## 
 ## No pre-processing
 ## Resampling: Cross-Validated (10 fold) 
-## Summary of sample sizes: 10836, 10837, 10836, 10837, 10839, 10837, ... 
+## Summary of sample sizes: 8685, 8685, 8685, 8685, 8685, 8685, ... 
 ## Resampling results across tuning parameters:
 ## 
 ##   mtry  Accuracy   Kappa    
-##    2    0.9900327  0.9875408
-##   12    0.9892865  0.9866079
-##   23    0.9853823  0.9817276
+##    2    0.9866321  0.9832902
+##   27    0.9882902  0.9853627
+##   52    0.9858031  0.9822539
 ## 
 ## Accuracy was used to select the optimal model using  the largest value.
-## The final value used for the model was mtry = 2.
+## The final value used for the model was mtry = 27.
 ```
 
-#Model Evaluation
-Seems like we got a prety good training accuracy. Lets check our test accuracy.
+```r
+plot(fit)
+```
+
+![](ExerciseQualityModel_files/figure-html/unnamed-chunk-3-1.png)<!-- -->
+
+The best accuracy in cross validation was archieved with 27 randomly selected predictor per tree. But there are only changes in the range of 0.2% by using different numbers of predictors. The estimatet out-of-sample error using the 10-fold-cross validation is 0.0117098 percent.
+
+This is a pretty good accuracy. 
+
+Let's check the out of sample error with an truly unseen dataset.
 
 
 ```r
-pred <- predict(fit, testing)
-confusionMatrix(pred, testing$classe)
+confusionMatrix(predict(fit, testing), testing$classe)
 ```
 
 ```
 ## Confusion Matrix and Statistics
 ## 
 ##           Reference
-## Prediction   A   B   C   D   E
-##          A 643   3   0   0   0
-##          B   0 611   7   0   0
-##          C   0  10 621   6   1
-##          D   1   0   2 626   5
-##          E   0   0   0   0 620
+## Prediction    A    B    C    D    E
+##          A 1284   12    0    0    0
+##          B    0 1270   11    1    0
+##          C    0    4 1266    8    2
+##          D    1    0    9 1276    7
+##          E    1    0    0    1 1277
 ## 
 ## Overall Statistics
 ##                                           
-##                Accuracy : 0.9889          
-##                  95% CI : (0.9846, 0.9923)
-##     No Information Rate : 0.2041          
+##                Accuracy : 0.9911          
+##                  95% CI : (0.9885, 0.9933)
+##     No Information Rate : 0.2             
 ##     P-Value [Acc > NIR] : < 2.2e-16       
 ##                                           
-##                   Kappa : 0.9861          
+##                   Kappa : 0.9889          
 ##  Mcnemar's Test P-Value : NA              
 ## 
 ## Statistics by Class:
 ## 
 ##                      Class: A Class: B Class: C Class: D Class: E
-## Sensitivity            0.9984   0.9792   0.9857   0.9905   0.9904
-## Specificity            0.9988   0.9972   0.9933   0.9968   1.0000
-## Pos Pred Value         0.9954   0.9887   0.9734   0.9874   1.0000
-## Neg Pred Value         0.9996   0.9949   0.9964   0.9976   0.9976
-## Prevalence             0.2041   0.1977   0.1996   0.2003   0.1984
-## Detection Rate         0.2037   0.1936   0.1968   0.1984   0.1965
-## Detection Prevalence   0.2047   0.1958   0.2022   0.2009   0.1965
-## Balanced Accuracy      0.9986   0.9882   0.9895   0.9937   0.9952
+## Sensitivity            0.9984   0.9876   0.9844   0.9922   0.9930
+## Specificity            0.9977   0.9977   0.9973   0.9967   0.9996
+## Pos Pred Value         0.9907   0.9906   0.9891   0.9869   0.9984
+## Neg Pred Value         0.9996   0.9969   0.9961   0.9981   0.9983
+## Prevalence             0.2000   0.2000   0.2000   0.2000   0.2000
+## Detection Rate         0.1997   0.1975   0.1969   0.1984   0.1986
+## Detection Prevalence   0.2016   0.1994   0.1991   0.2011   0.1989
+## Balanced Accuracy      0.9981   0.9926   0.9909   0.9945   0.9963
 ```
 
-I increased the number of variables from the most important variables until there was no increase in the testset accuracy. So no we will check the final accuracy on the validation set.
+It is pretty much the same error as the estimatet error from the cross validation.
 
-| Predcitors | Testset Accuracy |
-|------------|------------------|
-| 10         | 0.9819           |
-| 15         | 0.9869           |
-| 20         | 0.9894           |
-| 22         | 0.9912           |
-| 23         | 0.9906           |
-| 25         | 0.9891           |
+One could try to further tune the model to get a better accuracy, but im pretty confident that this is good enough for the assignment. Generally speaking, models with an accuracy over 95% are considered very good.
 
-
-```r
-pred <- predict(fit, validation)
-confusionMatrix(pred, validation$classe)
-```
-
-```
-## Confusion Matrix and Statistics
-## 
-##           Reference
-## Prediction   A   B   C   D   E
-##          A 163   0   0   0   0
-##          B   0 156   0   0   0
-##          C   0   4 194   2   0
-##          D   0   0   0 158   2
-##          E   0   0   0   0 204
-## 
-## Overall Statistics
-##                                           
-##                Accuracy : 0.9909          
-##                  95% CI : (0.9822, 0.9961)
-##     No Information Rate : 0.2333          
-##     P-Value [Acc > NIR] : < 2.2e-16       
-##                                           
-##                   Kappa : 0.9886          
-##  Mcnemar's Test P-Value : NA              
-## 
-## Statistics by Class:
-## 
-##                      Class: A Class: B Class: C Class: D Class: E
-## Sensitivity            1.0000   0.9750   1.0000   0.9875   0.9903
-## Specificity            1.0000   1.0000   0.9913   0.9972   1.0000
-## Pos Pred Value         1.0000   1.0000   0.9700   0.9875   1.0000
-## Neg Pred Value         1.0000   0.9945   1.0000   0.9972   0.9971
-## Prevalence             0.1846   0.1812   0.2197   0.1812   0.2333
-## Detection Rate         0.1846   0.1767   0.2197   0.1789   0.2310
-## Detection Prevalence   0.1846   0.1767   0.2265   0.1812   0.2310
-## Balanced Accuracy      1.0000   0.9875   0.9956   0.9924   0.9951
-```
-
-This is a pretty good accuracy. Lets create the predcitions for the final Quiz
+Lets create the predcitions for the final Quiz
 
 
 ```r
